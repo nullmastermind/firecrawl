@@ -6,7 +6,7 @@ import {
   PlanType,
   RateLimiterMode,
 } from "../types";
-import { supabase_service } from "../services/supabase";
+import { supabase_rr_service, supabase_service } from "../services/supabase";
 import { withAuth } from "../lib/withAuth";
 import { RateLimiterRedis } from "rate-limiter-flexible";
 import { sendNotification } from "../services/notification/email_notification";
@@ -64,8 +64,8 @@ export async function setCachedACUC(
         throw signal.error;
       }
 
-      // Cache for 10 minutes
-      await setValue(cacheKeyACUC, JSON.stringify(acuc), 600, true);
+      // Cache for 1 hour. - mogery
+      await setValue(cacheKeyACUC, JSON.stringify(acuc), 3600, true);
     });
   } catch (error) {
     logger.error(`Error updating cached ACUC ${cacheKeyACUC}: ${error}`);
@@ -96,13 +96,12 @@ export async function getACUC(
     let isExtract =
       mode === RateLimiterMode.Extract ||
       mode === RateLimiterMode.ExtractStatus;
-    let rpcName = isExtract
-      ? "auth_credit_usage_chunk_extract"
-      : "auth_credit_usage_chunk_test_22_credit_pack_n_extract";
     while (retries < maxRetries) {
-      ({ data, error } = await supabase_service.rpc(
-        rpcName,
-        { input_key: api_key },
+      const client =
+        Math.random() > (2/3) ? supabase_rr_service : supabase_service;
+      ({ data, error } = await client.rpc(
+        "auth_credit_usage_chunk_23_tally",
+        { input_key: api_key, i_is_extract: isExtract, tally_untallied_credits: true },
         { get: true },
       ));
 
@@ -112,6 +111,7 @@ export async function getACUC(
 
       logger.warn(
         `Failed to retrieve authentication and credit usage data after ${retries}, trying again...`,
+        { error }
       );
       retries++;
       if (retries === maxRetries) {
@@ -200,6 +200,11 @@ export async function supaAuthenticateUser(
   let chunk: AuthCreditUsageChunk | null = null;
   let plan: PlanType = "free";
   if (token == "this_is_just_a_preview_token") {
+    throw new Error(
+      "Unauthenticated Playground calls are temporarily disabled due to abuse. Please sign up.",
+    );
+  }
+  if (token == process.env.PREVIEW_TOKEN) {
     if (mode == RateLimiterMode.CrawlStatus) {
       rateLimiter = getRateLimiter(RateLimiterMode.CrawlStatus, token);
     } else if (mode == RateLimiterMode.ExtractStatus) {
@@ -294,7 +299,7 @@ export async function supaAuthenticateUser(
   }
 
   const team_endpoint_token =
-    token === "this_is_just_a_preview_token" ? iptoken : teamId;
+    token === process.env.PREVIEW_TOKEN ? iptoken : teamId;
 
   try {
     await rateLimiter.consume(team_endpoint_token);
@@ -324,7 +329,7 @@ export async function supaAuthenticateUser(
   }
 
   if (
-    token === "this_is_just_a_preview_token" &&
+    token === process.env.PREVIEW_TOKEN &&
     (mode === RateLimiterMode.Scrape ||
       mode === RateLimiterMode.Preview ||
       mode === RateLimiterMode.Map ||
